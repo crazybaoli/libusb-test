@@ -12,12 +12,20 @@
 *
 ********************************************************************************/
 
+/*
+1. SIGINT信号:ctrl-c
+2. 命令行解析
+ */
+
+
 #include <unistd.h>  
 #include <stdio.h>  
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include <libusb-1.0/libusb.h> 
+
 
 
 #define VID 0x0471
@@ -31,6 +39,10 @@
 #define SEND_BUFF_LEN    100
 #define RECV_BUFF_LEN    100
 
+#define BULK_TEST   1
+#define INT_TEST    2
+
+
 int no_device_flag = 0;
 
 unsigned char rev_buf[SEND_BUFF_LEN];
@@ -39,13 +51,13 @@ unsigned char send_buf[SEND_BUFF_LEN];
 libusb_device_handle *dev_handle; //a device handle  
 
 
-static int bulk_send(libusb_device_handle *hd, char *buf, int num, int timeout)
+static int bulk_send(char *buf, int num)
 {
 
     int size;
     int rec;    
     
-    rec = libusb_bulk_transfer(hd, BULK_SEND_EP, buf, num, &size, timeout);  
+    rec = libusb_bulk_transfer(dev_handle, BULK_SEND_EP, buf, num, &size, 0);  
     if(rec == 0) 
         printf("bulk send sucess,length is:%d\n", size);
     else
@@ -55,14 +67,31 @@ static int bulk_send(libusb_device_handle *hd, char *buf, int num, int timeout)
     
 }
 
+static int interrupt_send(char *buf, int num)
+{
 
-void *bulk_rev(void *arg)
+    int size;
+    int rec;    
+    
+    rec = libusb_interrupt_transfer(dev_handle, INT_SEND_EP, buf, num, &size, 0);  
+    if(rec == 0) 
+        printf("interrupt send sucess,length is:%d\n", size);
+    else
+        printf("interrupt send faild, err: %s\n", libusb_error_name(rec));
+
+    return 0;   
+    
+}
+
+
+void *bulk_rev_thread(void *arg)
 {
     int i=0;
     int size;
-    int rec;    
+    int rec;  
 
-    
+    printf("bulk_rev_thread started.\n");  
+
     while(1)
     {
         if(no_device_flag){
@@ -73,17 +102,52 @@ void *bulk_rev(void *arg)
         rec = libusb_bulk_transfer(dev_handle, BULK_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
-             printf("rev sucess,length:%d ,data is: %s\n",size,rev_buf);
-             printf("hexadecimal is: ");
-             for(i=0; i<size; i++)
-               printf("0x%x ",rev_buf[i]);
-            printf("\n\n");
+            printf("bulk ep rev sucess,length:%d ,data is: %s\n", size, rev_buf);
+            printf("hexadecimal is: ");
+            for(i=0; i<size; i++)
+                printf("0x%x ",rev_buf[i]);
+            printf("\n");
         }
         else
         {
-            printf("rev faild, err: %s\n", libusb_error_name(rec));
-            if(rec == LIBUSB_ERROR_NO_DEVICE)
-                pthread_exit(NULL);
+            printf("bulk ep rev faild, err: %s\n", libusb_error_name(rec));
+            if(rec == LIBUSB_ERROR_IO)
+                no_device_flag = 1; //防止一直输出err
+        }
+    }
+
+    
+}
+
+void *interrupt_rev_thread(void *arg)
+{
+    int i=0;
+    int size;
+    int rec;  
+
+    printf("interrupt_rev_thread started.\n");  
+
+    while(1)
+    {
+        if(no_device_flag){
+            usleep(50 * 1000);
+            continue;
+        }
+
+        rec = libusb_interrupt_transfer(dev_handle, INT_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
+        if(rec == 0) 
+        {
+            printf("interrupt ep rev sucess,length:%d ,data is: %s\n", size, rev_buf);
+            printf("hexadecimal is: ");
+            for(i=0; i<size; i++)
+                printf("0x%x ",rev_buf[i]);
+            printf("\n");
+        }
+        else
+        {
+            printf("interrupt ep rev faild, err: %s\n", libusb_error_name(rec));
+            if(rec == LIBUSB_ERROR_IO)
+                no_device_flag = 1; //防止一直输出err
         }
     }
 
@@ -91,15 +155,17 @@ void *bulk_rev(void *arg)
 }
 
 
-int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data) {
+//usb hotplugin callback function
+int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data) 
+{
     struct libusb_device_descriptor desc;
-    int rc;
+    int r;
     
     printf("usb hotplugin event.\n");
 
-    rc = libusb_get_device_descriptor(dev, &desc);
-    if (LIBUSB_SUCCESS != rc) {
-        printf("Error getting device descriptor\n");
+    r = libusb_get_device_descriptor(dev, &desc);
+    if (LIBUSB_SUCCESS != r) {
+        printf("error getting device descriptor.\n");
     }
     
     if (LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED == event) {
@@ -110,9 +176,9 @@ int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libu
             dev_handle = NULL;
         }
         
-        rc = libusb_open(dev, &dev_handle);
-        if (LIBUSB_SUCCESS != rc) {
-            printf ("Error opening device\n");
+        r = libusb_open(dev, &dev_handle);
+        if (LIBUSB_SUCCESS != r) {
+            printf ("error opening device.\n");
         }
         else {
             if(libusb_kernel_driver_active(dev_handle, 0) == 1) { //find out if kernel driver is attached
@@ -127,20 +193,15 @@ int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libu
             }
 
             no_device_flag = 0;          
-            printf("usb device open succ\n");
+            printf("usb device open sucess\n\n");
+            printf("input data to send:");
+            fflush(stdout);
         }
     }
     else if (LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT == event) {
         no_device_flag = 1;
-        printf("usb device removed: %04x:%04x\n", desc.idVendor, desc.idProduct);
-        if (dev_handle) {
-
-            int r = libusb_release_interface(dev_handle, 0);
-            if(r != 0) {
-                printf("cannot release interface\n");
-            }
-            
-            libusb_attach_kernel_driver(dev_handle, 0);
+        printf("usb device removed: %04x:%04x\n\n", desc.idVendor, desc.idProduct);
+        if (dev_handle) {           
             libusb_close(dev_handle);
             dev_handle = NULL;
 
@@ -154,7 +215,8 @@ int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libu
 
 
 //usb hotplugin monitor thread
-void * usb_monitor_thread(void *arg) { 
+void * usb_monitor_thread(void *arg) 
+{ 
     printf("usb monitor thread started.\n");
 
     int r = 0;
@@ -164,45 +226,131 @@ void * usb_monitor_thread(void *arg) {
             printf("libusb_handle_events() failed: %s\n", libusb_error_name(r));
     }  
 
-    //libusb_exit(ctx);
-    printf("usb monitor thread exited.\n");
 }
 
 
-  
-int main() {  
-    libusb_device **devs; //pointer to pointer of device, used to retrieve a list of devices  
+void help(void)
+{
+    printf("usage: libusb-test [-h] [-b] [-i] [-b file] [vid:pid]\n");
+    printf("   -h      : display usage\n");
+    printf("   -b      : test bulk transfer\n");   
+    printf("   -i      : test interrupt transfer\n"); 
+    printf("   -v      : usb VID\n");
+    printf("   -p      : usb PID\n"); 
+
+    return;  
+ 
+}
+ 
+
+int str2hex(char *hex) 
+{
+    int sum = 0;
+    int tmp = 0;
+    char hex_str[5];
+
+    if(strlen(hex) == 6)    //0x1234
+        memcpy(hex_str, &hex[2], 4);
+    else
+        memcpy(hex_str, hex, 4);
+
+    for(int i = 0; i < 4; i++)
+    {
+        tmp = hex_str[i] - (((hex_str[i] >= '0') && (hex_str[i] <= '9')) ? '0' : ((hex_str[i] >= 'A') && (hex_str[i] <= 'Z')) ? 'A' - 10 : 'a' - 10);
+        sum += tmp * pow(16, 3-i);
+    }
+
+    return sum;
+}
+
+
+int main(int argc, char **argv) 
+{  
     libusb_context *ctx = NULL; //a libusb session  
     int r; //for return values  
     ssize_t cnt; //holding number of devices in list  
+    int opt;
+    int test_mode;
+    int vid, pid;
     
-    pthread_t a_thread;
+    pthread_t bulk_rev_thread_id;
+    pthread_t int_rev_thread_id;
     pthread_t usb_monitor_thread_id;
     
-    printf("\nlibusb test v3.0---by baoli\n\n");
+    test_mode = BULK_TEST;
+    vid = VID;
+    pid = PID;
+   
+
+    while((opt = getopt(argc, argv, "bihv:p:")) != -1)
+    {
+        switch(opt)
+        {
+            case 'b' :
+            case 'B' :
+                test_mode = BULK_TEST;
+                break;
+            case 'i' :
+            case 'I' :
+                test_mode = INT_TEST;
+                break;
+            case 'v' :
+            case 'V' :
+                vid = str2hex(optarg);
+                break;
+            case 'p' :
+            case 'P' :
+                pid = str2hex(optarg);
+                break;
+            case 'h' :
+            case 'H' :
+                help();
+                return 0;
+                break;
+            default  :
+                printf("unkonw option.\n");
+                help();
+                return 0;
+        }
+    }
+
+    printf("\nlibusb test---by baoli\n");
+    if(test_mode == BULK_TEST)
+        printf("test bulk transfer, VID:%#04x PID:%#04x\n\n", vid, pid);
+    else if(test_mode == INT_TEST)
+        printf("test interrupt transfer, VID:%#04x PID:%#04x\n\n", vid, pid);
+    else
+        printf("unkonw test\n\n");
+
 
     r = libusb_init(&ctx); //initialize the library for the session we just declared  
     if(r < 0) {  
         printf("libusb init faild, err:%s\n", libusb_error_name(r)); //there was an error  
-        return 1;  
+        return -1;  
     } 
 
     libusb_set_debug(ctx, LIBUSB_LOG_LEVEL_WARNING); 
 
-    r = libusb_hotplug_register_callback(ctx, LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT, LIBUSB_HOTPLUG_NO_FLAGS, VID, PID, LIBUSB_HOTPLUG_MATCH_ANY, usb_event_callback, NULL, NULL);
+    if (!libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) {
+        printf("hotplug capabilites are not supported on this platform.\n");
+        libusb_exit (NULL);
+        return -1;
+    }
+
+    r = libusb_hotplug_register_callback(ctx, LIBUSB_HOTPLUG_EVENT_DEVICE_ARRIVED | LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT, LIBUSB_HOTPLUG_NO_FLAGS, vid, pid, LIBUSB_HOTPLUG_MATCH_ANY, usb_event_callback, NULL, NULL);
     if (LIBUSB_SUCCESS != r) {
         printf("error registering callback: %s\n", libusb_error_name(r));
         libusb_exit(ctx);
-        return 1;
+        return -1;
     }   
     
-    dev_handle = libusb_open_device_with_vid_pid(ctx, VID, PID);  //open a usb device with VID&PID
+    dev_handle = libusb_open_device_with_vid_pid(ctx, vid, pid);  //open a usb device with VID&PID
     if(dev_handle == NULL)  {
-        printf("Cannot open device\n");  
-        return 1;
+        printf("cannot open device\n");  
+        return -1;
     }
     else  
-        printf("Device Opened\n");  
+        printf("usb device opened.\n");  
   
     r = libusb_kernel_driver_active(dev_handle, 0);
     if(r == 0)  //ok
@@ -213,18 +361,18 @@ int main() {
             printf("Kernel driver is detached!\n");
         else{
             printf("libusb_detach_kernel_driver, err:%s\n", libusb_error_name(r));
-            return 1;
+            return -1;
         }  
     }
     else{
         printf("libusb_kernel_driver_active, err:%s\n", libusb_error_name(r));
-        return 1;
+        return -1;
     } 
 
     r = libusb_claim_interface(dev_handle, 0); //claim interface 0 ,stm32采用接口0
     if(r < 0) {  
         printf("cannot claim interface, err:%s\n", libusb_error_name(r));
-        return 1;  
+        return -1;  
     }  
 
     //热插拔监听
@@ -235,22 +383,54 @@ int main() {
     } 
 
     //new thread,usb rev data
-    r = pthread_create(&a_thread, NULL, bulk_rev, NULL);
-    if(r != 0 )
-    {
-        perror("thread creation faild\n");
+    if(test_mode == BULK_TEST){
+        r = pthread_create(&bulk_rev_thread_id, NULL, bulk_rev_thread, NULL);
+        if(r != 0 )
+        {
+            perror("thread creation faild\n");
+        }
     }
+    else if(test_mode == INT_TEST){
+         r = pthread_create(&int_rev_thread_id, NULL, interrupt_rev_thread, NULL);
+        if(r != 0 )
+        {
+            perror("thread creation faild\n");
+        }       
+    }
+
+    usleep(1000 * 5);   //等线程开始执行后，再执行while
 
     while(1)
     {
-        printf("input data to send:\n");
+        printf("\ninput data to send:");
+
         fgets(send_buf, SEND_BUFF_LEN, stdin);
-        bulk_send(dev_handle, send_buf, strlen(send_buf)-1, 0);
+        if(strncmp(send_buf, "quit", 4) == 0){
+            // r = pthread_cancel(bulk_rev_thread_id); //取消线程bulk_rev_thread，直接调用libusb_close会出现一些错误提示。
+            // if(r != 0){
+            //     perror("pthread_cancel faild.");
+            // }
+            // r = pthread_join(bulk_rev_thread_id, NULL); //等待线程取消
+            // if(r != 0){
+            //     perror("pthread_join faild.");
+            // }
+
+            libusb_close(dev_handle); //close the device
+            libusb_exit(ctx); //needs to be called to end the    
+            printf("libusb test quit.\n");
+            return 0;          
+        }
+
+        if(test_mode == BULK_TEST)
+            bulk_send(send_buf, strlen(send_buf)-1);
+        else if(test_mode == INT_TEST)
+            interrupt_send(send_buf, strlen(send_buf)-1);
+        else
+            printf("unkonw test mode\n");
     }
 
   
-    libusb_close(dev_handle); //close the device
-    libusb_exit(ctx); //needs to be called to end the  
+
   
-    return 0;  
+     
 }  
