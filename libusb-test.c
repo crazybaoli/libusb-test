@@ -5,17 +5,12 @@
 *  Create Date   : 2017.11.21
 *  Version       : 1.0
 *  Description   : libusb test
-*                  compile command: gcc -o usbtest usbtest.c -lusb-1.0 -lpthread             
+*                  compile command: gcc -o usbtest libusb-test.c -lusb-1.0 -lpthread -lm             
 *  History       : 1. Data:
 *                     Author:
 *                     Modification:
 *
 ********************************************************************************/
-
-/*
-1. SIGINT信号:ctrl-c
-2. 命令行解析
- */
 
 
 #include <unistd.h>  
@@ -36,8 +31,8 @@
 #define INT_RECV_EP     0x81
 #define INT_SEND_EP     0x01
 
-#define SEND_BUFF_LEN    100
-#define RECV_BUFF_LEN    100
+#define SEND_BUFF_LEN    500
+#define RECV_BUFF_LEN    500
 
 #define BULK_TEST   1
 #define INT_TEST    2
@@ -49,6 +44,7 @@ unsigned char rev_buf[SEND_BUFF_LEN];
 unsigned char send_buf[SEND_BUFF_LEN]; 
 
 libusb_device_handle *dev_handle; //a device handle  
+
 
 
 static int bulk_send(char *buf, int num)
@@ -66,6 +62,7 @@ static int bulk_send(char *buf, int num)
     return 0;   
     
 }
+
 
 static int interrupt_send(char *buf, int num)
 {
@@ -119,6 +116,7 @@ void *bulk_rev_thread(void *arg)
     
 }
 
+
 void *interrupt_rev_thread(void *arg)
 {
     int i=0;
@@ -161,7 +159,7 @@ int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libu
     struct libusb_device_descriptor desc;
     int r;
     
-    printf("usb hotplugin event.\n");
+    printf("\nusb hotplugin event.\n");
 
     r = libusb_get_device_descriptor(dev, &desc);
     if (LIBUSB_SUCCESS != r) {
@@ -200,7 +198,7 @@ int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libu
     }
     else if (LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT == event) {
         no_device_flag = 1;
-        printf("usb device removed: %04x:%04x\n\n", desc.idVendor, desc.idProduct);
+        printf("usb device removed: %04x:%04x\n", desc.idVendor, desc.idProduct);
         if (dev_handle) {           
             libusb_close(dev_handle);
             dev_handle = NULL;
@@ -231,7 +229,7 @@ void * usb_monitor_thread(void *arg)
 
 void help(void)
 {
-    printf("usage: libusb-test [-h] [-b] [-i] [-b file] [vid:pid]\n");
+    printf("usage: libusb-test [-h] [-b] [-i] [-v vid] [-p pid] \n");
     printf("   -h      : display usage\n");
     printf("   -b      : test bulk transfer\n");   
     printf("   -i      : test interrupt transfer\n"); 
@@ -243,6 +241,8 @@ void help(void)
 }
  
 
+//字符串转十六进制
+// 0x1234 -> 0x1234   or 1234 -> 0x1234
 int str2hex(char *hex) 
 {
     int sum = 0;
@@ -316,11 +316,14 @@ int main(int argc, char **argv)
 
     printf("\nlibusb test---by baoli\n");
     if(test_mode == BULK_TEST)
-        printf("test bulk transfer, VID:%#04x PID:%#04x\n\n", vid, pid);
+        printf("test bulk transfer\n");
     else if(test_mode == INT_TEST)
-        printf("test interrupt transfer, VID:%#04x PID:%#04x\n\n", vid, pid);
-    else
-        printf("unkonw test\n\n");
+        printf("test interrupt transfer\n");
+    else{
+        printf("unkonw test mode.\n");
+        return 0;
+    }
+    printf("usb device: VID:%#06x PID:%#06x\n\n", vid, pid);    //#:输出0x，06:vid或pid第一个数字为0时，输出0x0471而不是0x471
 
 
     r = libusb_init(&ctx); //initialize the library for the session we just declared  
@@ -405,32 +408,13 @@ int main(int argc, char **argv)
         printf("\ninput data to send:");
 
         fgets(send_buf, SEND_BUFF_LEN, stdin);
-        if(strncmp(send_buf, "quit", 4) == 0){
-            // r = pthread_cancel(bulk_rev_thread_id); //取消线程bulk_rev_thread，直接调用libusb_close会出现一些错误提示。
-            // if(r != 0){
-            //     perror("pthread_cancel faild.");
-            // }
-            // r = pthread_join(bulk_rev_thread_id, NULL); //等待线程取消
-            // if(r != 0){
-            //     perror("pthread_join faild.");
-            // }
-
-            libusb_close(dev_handle); //close the device
-            libusb_exit(ctx); //needs to be called to end the    
-            printf("libusb test quit.\n");
-            return 0;          
-        }
 
         if(test_mode == BULK_TEST)
             bulk_send(send_buf, strlen(send_buf)-1);
         else if(test_mode == INT_TEST)
             interrupt_send(send_buf, strlen(send_buf)-1);
         else
-            printf("unkonw test mode\n");
-    }
-
-  
-
-  
+            ;
+    }  
      
 }  
