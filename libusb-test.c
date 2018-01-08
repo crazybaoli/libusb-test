@@ -45,6 +45,16 @@ unsigned char send_buf[SEND_BUFF_LEN];
 
 libusb_device_handle *dev_handle; //a device handle  
 
+char test_bytes[] = 
+"abcdefghijklmnopqrstuvwxyz\n"
+"abcdefghijklmnopqrstuvwxyz\n"
+"abcdefghijklmnopqrstuvwxyz\n"
+"abcdefghijklmnopqrstuvwxyz\n"
+"abcdefghijklmnopqrstuvwxyz\n"
+"abcdefghijklmnopqrstuvwxyz\n"
+"abcdefghijklmnopqrstuvwxyz\n"
+"abcdefghijklmnopqrstuvwxyz\n";   //27*8 bytes
+
 
 
 static int bulk_send(char *buf, int num)
@@ -99,11 +109,14 @@ void *bulk_rev_thread(void *arg)
         rec = libusb_bulk_transfer(dev_handle, BULK_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
-            printf("bulk ep rev sucess,length:%d ,data is: %s\n", size, rev_buf);
+            printf("bulk ep rev sucess, length: %d bytes. \n", size);
+            //printf("bulk ep rev sucess, length:%d ,data is: %s\n", size, rev_buf);
+            printf("data is: %s\n", rev_buf);
             printf("hexadecimal is: ");
             for(i=0; i<size; i++)
-                printf("0x%x ",rev_buf[i]);
+                printf("0x%x ", rev_buf[i]);
             printf("\n");
+            fflush(stdout);
         }
         else
         {
@@ -272,6 +285,7 @@ int main(int argc, char **argv)
     int opt;
     int test_mode;
     int vid, pid;
+    int send_length;
     
     pthread_t bulk_rev_thread_id;
     pthread_t int_rev_thread_id;
@@ -405,14 +419,29 @@ int main(int argc, char **argv)
 
     while(1)
     {
-        printf("\ninput data to send:");
+        usleep(10*1000);
+        printf("\ninput data to send or command:");
 
+        memset(send_buf, 0, SEND_BUFF_LEN);
         fgets(send_buf, SEND_BUFF_LEN, stdin);
+        send_length = strlen(send_buf)-1;
+        send_buf[send_length] = '\0' ;   //将读入的换行符转为\0
+
+        //用于自动发送数据测试，如输入test64，会自动发送64字节数据
+        if(strncmp(send_buf, "test", 4) == 0){
+            send_length = atoi(&send_buf[4]);
+            if(send_length > strlen(test_bytes)){
+                printf("send_length:%d should less than max_length:%ld\n", send_length, strlen(test_bytes));
+                continue;
+            }
+            printf("test sending %d bytes.\n", send_length);
+            memcpy(send_buf, test_bytes, send_length);
+        }
 
         if(test_mode == BULK_TEST)
-            bulk_send(send_buf, strlen(send_buf)-1);
+            bulk_send(send_buf, send_length);
         else if(test_mode == INT_TEST)
-            interrupt_send(send_buf, strlen(send_buf)-1);
+            interrupt_send(send_buf, send_length);
         else
             ;
     }  

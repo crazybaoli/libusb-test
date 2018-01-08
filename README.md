@@ -1,6 +1,6 @@
 ## libusb-test
 
-### 1.complie command: 
+### 1.compile command: 
 	gcc -o libusb-test libusb-test.c -lusb-1.0 -lpthread -lm
 
 ### 2.功能： 
