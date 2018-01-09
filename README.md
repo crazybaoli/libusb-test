@@ -7,3 +7,5 @@
 - 支持bulk/interrupt endpoint 数据读写
 - 支持hotplug
 - 支持命令行参数
+- 支持快捷发送数据
+- 支持将收到的数据保存为文件

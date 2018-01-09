@@ -22,6 +22,9 @@
 #include <libusb-1.0/libusb.h> 
 
 
+typedef unsigned char uchar;
+typedef unsigned int  uint;
+
 
 #define VID 0x0471
 #define PID 0x0999
@@ -37,23 +40,33 @@
 #define BULK_TEST   1
 #define INT_TEST    2
 
+#define SAVE_FILE_PATH  "libusb_test_recv_data"
+
 
 int no_device_flag = 0;
+FILE *g_file_stream = NULL;
+int g_file_save_en = 0; //文件保存使能标志
 
-unsigned char rev_buf[SEND_BUFF_LEN];
-unsigned char send_buf[SEND_BUFF_LEN]; 
+uchar rev_buf[SEND_BUFF_LEN];
+uchar send_buf[SEND_BUFF_LEN]; 
 
 libusb_device_handle *dev_handle; //a device handle  
 
 char test_bytes[] = 
-"abcdefghijklmnopqrstuvwxyz\n"
-"abcdefghijklmnopqrstuvwxyz\n"
-"abcdefghijklmnopqrstuvwxyz\n"
-"abcdefghijklmnopqrstuvwxyz\n"
-"abcdefghijklmnopqrstuvwxyz\n"
-"abcdefghijklmnopqrstuvwxyz\n"
-"abcdefghijklmnopqrstuvwxyz\n"
-"abcdefghijklmnopqrstuvwxyz\n";   //27*8 bytes
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n";   //37*10 bytes
+
+
+int save_to_file(FILE *file_stream, uchar *data, int length);
 
 
 
@@ -96,6 +109,7 @@ void *bulk_rev_thread(void *arg)
     int i=0;
     int size;
     int rec;  
+    int save_bytes;
 
     printf("bulk_rev_thread started.\n");  
 
@@ -109,14 +123,17 @@ void *bulk_rev_thread(void *arg)
         rec = libusb_bulk_transfer(dev_handle, BULK_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
+            if(g_file_save_en){
+                save_bytes = save_to_file(g_file_stream, rev_buf, size);            
+                printf("save %d bytes to file.\n", save_bytes);
+            }
+
             printf("bulk ep rev sucess, length: %d bytes. \n", size);
-            //printf("bulk ep rev sucess, length:%d ,data is: %s\n", size, rev_buf);
             printf("data is: %s\n", rev_buf);
             printf("hexadecimal is: ");
             for(i=0; i<size; i++)
                 printf("0x%x ", rev_buf[i]);
             printf("\n");
-            fflush(stdout);
         }
         else
         {
@@ -135,6 +152,7 @@ void *interrupt_rev_thread(void *arg)
     int i=0;
     int size;
     int rec;  
+    int save_bytes;
 
     printf("interrupt_rev_thread started.\n");  
 
@@ -148,7 +166,13 @@ void *interrupt_rev_thread(void *arg)
         rec = libusb_interrupt_transfer(dev_handle, INT_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
-            printf("interrupt ep rev sucess,length:%d ,data is: %s\n", size, rev_buf);
+            if(g_file_save_en){
+                save_bytes = save_to_file(g_file_stream, rev_buf, size);            
+                printf("save %d bytes to file.\n", save_bytes);
+            }
+
+            printf("interrupt ep rev sucess, length: %d bytes. \n", size);
+            printf("data is: %s\n", rev_buf);
             printf("hexadecimal is: ");
             for(i=0; i<size; i++)
                 printf("0x%x ",rev_buf[i]);
@@ -205,7 +229,7 @@ int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libu
 
             no_device_flag = 0;          
             printf("usb device open sucess\n\n");
-            printf("input data to send:");
+            printf("input data to send or command:");
             fflush(stdout);
         }
     }
@@ -242,12 +266,13 @@ void * usb_monitor_thread(void *arg)
 
 void help(void)
 {
-    printf("usage: libusb-test [-h] [-b] [-i] [-v vid] [-p pid] \n");
+    printf("usage: libusb-test [-h] [-b] [-i] [-v vid] [-p pid] [-ffile_path] \n");
     printf("   -h      : display usage\n");
     printf("   -b      : test bulk transfer\n");   
     printf("   -i      : test interrupt transfer\n"); 
     printf("   -v      : usb VID\n");
     printf("   -p      : usb PID\n"); 
+    printf("   -f      : file path to save data\n"); 
 
     return;  
  
@@ -277,6 +302,22 @@ int str2hex(char *hex)
 }
 
 
+
+//将接收到数据保存到文件中
+int save_to_file(FILE *file_stream, uchar *data, int length)
+{
+    int write_num;
+    write_num = fwrite(data, 1, length, file_stream);
+    fputc('\n', file_stream);   //为每段数据换行，方便查看
+    fflush(file_stream);
+
+    return write_num;
+
+}
+
+
+
+
 int main(int argc, char **argv) 
 {  
     libusb_context *ctx = NULL; //a libusb session  
@@ -294,9 +335,10 @@ int main(int argc, char **argv)
     test_mode = BULK_TEST;
     vid = VID;
     pid = PID;
+    g_file_save_en = 0;
    
 
-    while((opt = getopt(argc, argv, "bihv:p:")) != -1)
+    while((opt = getopt(argc, argv, "bif::hv:p:")) != -1)
     {
         switch(opt)
         {
@@ -308,6 +350,14 @@ int main(int argc, char **argv)
             case 'I' :
                 test_mode = INT_TEST;
                 break;
+            case 'f' :
+            case 'F' :
+                g_file_stream = fopen(optarg == NULL ? SAVE_FILE_PATH : optarg, "wb");    //写打开，并将文件长度截为0，没有则新建
+                if(g_file_stream)  
+                    g_file_save_en = 1;
+                else
+                    perror("file open faild: ");    
+                break;                
             case 'v' :
             case 'V' :
                 vid = str2hex(optarg);
@@ -419,7 +469,7 @@ int main(int argc, char **argv)
 
     while(1)
     {
-        usleep(10*1000);
+        usleep(10 * 1000);
         printf("\ninput data to send or command:");
 
         memset(send_buf, 0, SEND_BUFF_LEN);
@@ -427,7 +477,7 @@ int main(int argc, char **argv)
         send_length = strlen(send_buf)-1;
         send_buf[send_length] = '\0' ;   //将读入的换行符转为\0
 
-        //用于自动发送数据测试，如输入test64，会自动发送64字节数据
+        //用于快捷发送数据，如输入test64，会自动发送64字节数据，输入test100则会自动发送100字节数据
         if(strncmp(send_buf, "test", 4) == 0){
             send_length = atoi(&send_buf[4]);
             if(send_length > strlen(test_bytes)){
