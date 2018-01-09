@@ -19,6 +19,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <signal.h>
+
 #include <libusb-1.0/libusb.h> 
 
 
@@ -316,6 +318,13 @@ int save_to_file(FILE *file_stream, uchar *data, int length)
 }
 
 
+//ctrl+c 信号处理函数
+void sigint_handler(int sig)
+{
+    fclose(g_file_stream);
+    printf("\nlibusb test quit.\n");
+    exit(0);
+}
 
 
 int main(int argc, char **argv) 
@@ -327,6 +336,8 @@ int main(int argc, char **argv)
     int test_mode;
     int vid, pid;
     int send_length;
+
+    struct sigaction act;
     
     pthread_t bulk_rev_thread_id;
     pthread_t int_rev_thread_id;
@@ -336,6 +347,10 @@ int main(int argc, char **argv)
     vid = VID;
     pid = PID;
     g_file_save_en = 0;
+
+    act.sa_handler = sigint_handler;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
    
 
     while((opt = getopt(argc, argv, "bif::hv:p:")) != -1)
@@ -389,6 +404,7 @@ int main(int argc, char **argv)
     }
     printf("usb device: VID:%#06x PID:%#06x\n\n", vid, pid);    //#:输出0x，06:vid或pid第一个数字为0时，输出0x0471而不是0x471
 
+    sigaction(SIGINT, &act, NULL);
 
     r = libusb_init(&ctx); //initialize the library for the session we just declared  
     if(r < 0) {  
