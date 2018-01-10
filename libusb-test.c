@@ -5,7 +5,7 @@
 *  Create Date   : 2017.11.21
 *  Version       : 1.0
 *  Description   : libusb test
-*                  compile command: gcc -o usbtest libusb-test.c -lusb-1.0 -lpthread -lm             
+*                  compile command: gcc -o libusb libusb-test.c -lusb-1.0 -lpthread -lm             
 *  History       : 1. Data:
 *                     Author:
 *                     Modification:
@@ -68,11 +68,30 @@ char test_bytes[] =
 "abcdefghijklmnopqrstuvwxyz0123456789\n";   //37*10 bytes
 
 
+
+int bulk_send(char *buf, int num);
+int interrupt_send(char *buf, int num);
+void *bulk_rev_thread(void *arg);
+void *interrupt_rev_thread(void *arg);
+int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data);
+void help(void);
+int str2hex(char *hex);
+void * usb_monitor_thread(void *arg);
 int save_to_file(FILE *file_stream, uchar *data, int length);
+void print_devs(libusb_device **devs);
+int list_devices(void);
+void print_endpoint(const struct libusb_endpoint_descriptor *endpoint);
+void print_altsetting(const struct libusb_interface_descriptor *interface);
+void print_interface(const struct libusb_interface *interface);
+void print_configuration(struct libusb_config_descriptor *config);
+void print_device(libusb_device *dev, struct libusb_device_descriptor *desc);
+int print_descriptor(libusb_device *dev);
+int get_descriptor_with_vid_pid(int vid, int pid);
+void sigint_handler(int sig);
 
 
 
-static int bulk_send(char *buf, int num)
+int bulk_send(char *buf, int num)
 {
 
     int size;
@@ -89,7 +108,7 @@ static int bulk_send(char *buf, int num)
 }
 
 
-static int interrupt_send(char *buf, int num)
+int interrupt_send(char *buf, int num)
 {
 
     int size;
@@ -268,7 +287,7 @@ void * usb_monitor_thread(void *arg)
 
 void help(void)
 {
-    printf("usage: libusb-test [-h] [-b] [-i] [-v vid] [-p pid] [-ffile_path] [-l] \n");
+    printf("usage: libusb-test [-h] [-b] [-i] [-v vid] [-p pid] [-ffile_path] [-l] [-a] \n");
     printf("   -h      : display usage\n");
     printf("   -b      : test bulk transfer\n");   
     printf("   -i      : test interrupt transfer\n"); 
@@ -276,6 +295,7 @@ void help(void)
     printf("   -p      : usb PID\n"); 
     printf("   -f      : file path to save data\n"); 
     printf("   -l      : list usb devices\n");
+    printf("   -a      : print descriptor for the usb(VID:PID)\n");
 
     return;  
  
@@ -380,20 +400,164 @@ int list_devices(void)
 
 
 
+void print_endpoint(const struct libusb_endpoint_descriptor *endpoint)
+{
+    int i, ret;
+
+    printf("      Endpoint descriptor:\n");
+    printf("        bEndpointAddress: %02xh\n", endpoint->bEndpointAddress);
+    printf("        bmAttributes:     %02xh\n", endpoint->bmAttributes);
+    printf("        wMaxPacketSize:   %d\n", endpoint->wMaxPacketSize);
+    printf("        bInterval:        %d\n", endpoint->bInterval);
+    printf("        bRefresh:         %d\n", endpoint->bRefresh);
+    printf("        bSynchAddress:    %d\n", endpoint->bSynchAddress);
+
+}
+
+void print_altsetting(const struct libusb_interface_descriptor *interface)
+{
+    int i;
+
+    printf("    Interface descriptor:\n");
+    printf("      bInterfaceNumber:   %d\n", interface->bInterfaceNumber);
+    printf("      bAlternateSetting:  %d\n", interface->bAlternateSetting);
+    printf("      bNumEndpoints:      %d\n", interface->bNumEndpoints);
+    printf("      bInterfaceClass:    %d\n", interface->bInterfaceClass);
+    printf("      bInterfaceSubClass: %d\n", interface->bInterfaceSubClass);
+    printf("      bInterfaceProtocol: %d\n", interface->bInterfaceProtocol);
+    printf("      iInterface:         %d\n", interface->iInterface);
+
+    for (i = 0; i < interface->bNumEndpoints; i++)
+        print_endpoint(&interface->endpoint[i]);
+}
+
+
+void print_interface(const struct libusb_interface *interface)
+{
+    int i;
+
+    for (i = 0; i < interface->num_altsetting; i++)
+        print_altsetting(&interface->altsetting[i]);
+}
+
+void print_configuration(struct libusb_config_descriptor *config)
+{
+    int i;
+
+    printf("  Configuration descriptor:\n");
+    printf("    wTotalLength:         %d\n", config->wTotalLength);
+    printf("    bNumInterfaces:       %d\n", config->bNumInterfaces);
+    printf("    bConfigurationValue:  %d\n", config->bConfigurationValue);
+    printf("    iConfiguration:       %d\n", config->iConfiguration);
+    printf("    bmAttributes:         %02xh\n", config->bmAttributes);
+    printf("    MaxPower:             %d\n", config->MaxPower);
+
+    for (i = 0; i < config->bNumInterfaces; i++)
+        print_interface(&config->interface[i]);
+}
+
+
+void print_device(libusb_device *dev, struct libusb_device_descriptor *desc)
+{
+    int i;
+
+    printf("Device descriptor:\n");
+    printf("  bDescriptorType:         %d\n", desc->bDescriptorType);
+    printf("  bcdUSB:                  %#06x\n", desc->bcdUSB);
+    printf("  bDeviceClass:            %d\n", desc->bDeviceClass);
+    printf("  bDeviceSubClass:         %d\n", desc->bDeviceSubClass);
+    printf("  bDeviceProtocol:         %d\n", desc->bDeviceProtocol);
+    printf("  bMaxPacketSize0:         %d\n", desc->bMaxPacketSize0);
+    printf("  idVendor:                %#06x\n", desc->idVendor);
+    printf("  idProduct:               %#06x\n", desc->idProduct);
+    printf("  bNumConfigurations:      %d\n", desc->bNumConfigurations);
+
+
+    for (i = 0; i < desc->bNumConfigurations; i++) {
+        struct libusb_config_descriptor *config;
+        int ret = libusb_get_config_descriptor(dev, i, &config);
+        if (LIBUSB_SUCCESS != ret) {
+            printf("Couldn't retrieve descriptors\n");
+            continue;
+        }
+
+        print_configuration(config);
+        libusb_free_config_descriptor(config);
+    }
+}
+
+
+//打印USB设备的描述符
+int print_descriptor(libusb_device *dev)
+{
+    struct libusb_device_descriptor desc;
+    int ret, i;
+
+    ret = libusb_get_device_descriptor(dev, &desc);
+    if (ret < 0) {
+        printf("failed to get device descriptor\n");
+        return -1;
+    }
+
+    print_device(dev, &desc);       
+
+}
+
+
+//根据VID:PID，打印特定USB设备的描述符
+int get_descriptor_with_vid_pid(int vid, int pid)
+{
+    libusb_device **devs;
+    libusb_device *found = NULL;
+    libusb_device *dev;
+    ssize_t cnt;
+    int r, i;
+
+    r = libusb_init(NULL);
+    if (r < 0)
+        return -1;
+
+    cnt = libusb_get_device_list(NULL, &devs);
+    if (cnt < 0)
+        return -1;
+
+    while ((dev = devs[i++]) != NULL) {
+        struct libusb_device_descriptor desc;
+        r = libusb_get_device_descriptor(dev, &desc);
+        if (r < 0)
+            return -1;
+        if (desc.idVendor == vid && desc.idProduct == pid) {
+            found = dev;
+            break;
+        }
+    }
+
+    print_descriptor(found);
+
+    libusb_free_device_list(devs, 1);
+
+    libusb_exit(NULL);
+    return 0;    
+}
+
+
 //ctrl+c 信号处理函数
 void sigint_handler(int sig)
 {
-    fclose(g_file_stream);
+    if(g_file_stream)
+        fclose(g_file_stream);
+
     printf("\nlibusb test quit.\n");
     exit(0);
 }
 
 
+
 int main(int argc, char **argv) 
 {  
     libusb_context *ctx = NULL; //a libusb session  
-    int r; //for return values  
-    ssize_t cnt; //holding number of devices in list  
+    int r;  
+    ssize_t cnt; 
     int opt;
     int test_mode;
     int vid, pid;
@@ -447,7 +611,12 @@ int main(int argc, char **argv)
             case 'L' :
                 list_devices();
                 exit(0);
-                break;                                
+                break; 
+            case 'a' :
+            case 'A' :
+                get_descriptor_with_vid_pid(vid, pid);
+                exit(0);
+                break;                                               
             case 'h' :
             case 'H' :
                 help();
@@ -460,7 +629,7 @@ int main(int argc, char **argv)
         }
     }
 
-    printf("\nlibusb test---by baoli\n");
+    printf("\nlibusb test\n");
     if(test_mode == BULK_TEST)
         printf("test bulk transfer\n");
     else if(test_mode == INT_TEST)
