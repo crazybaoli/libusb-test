@@ -268,13 +268,14 @@ void * usb_monitor_thread(void *arg)
 
 void help(void)
 {
-    printf("usage: libusb-test [-h] [-b] [-i] [-v vid] [-p pid] [-ffile_path] \n");
+    printf("usage: libusb-test [-h] [-b] [-i] [-v vid] [-p pid] [-ffile_path] [-l] \n");
     printf("   -h      : display usage\n");
     printf("   -b      : test bulk transfer\n");   
     printf("   -i      : test interrupt transfer\n"); 
     printf("   -v      : usb VID\n");
     printf("   -p      : usb PID\n"); 
     printf("   -f      : file path to save data\n"); 
+    printf("   -l      : list usb devices\n");
 
     return;  
  
@@ -318,6 +319,67 @@ int save_to_file(FILE *file_stream, uchar *data, int length)
 }
 
 
+//列出系统所有的USB设备.
+//包括：bus number. device number, vid, pid, product info
+void print_devs(libusb_device **devs)
+{
+    libusb_device *dev;
+    int i = 0, j = 0;
+    uint8_t path[8]; 
+    libusb_device_handle *handle = NULL;
+    char string[256];
+
+    while ((dev = devs[i++]) != NULL) {
+        struct libusb_device_descriptor desc;
+        int r = libusb_get_device_descriptor(dev, &desc);
+        if (r < 0) {
+            printf("failed to get device descriptor\n");
+            return;
+        }
+
+        printf("bus: %03d device: %03d, VID: %04x PID: %04x", 
+            libusb_get_bus_number(dev), libusb_get_device_address(dev), desc.idVendor, desc.idProduct);
+
+        int ret = libusb_open(dev, &handle);
+        if (LIBUSB_SUCCESS == ret) {
+            if (desc.iProduct) {
+                ret = libusb_get_string_descriptor_ascii(handle, desc.iProduct, string, sizeof(string));    //显示产品信息
+                if (ret > 0)   
+                    printf(", %s", string);
+            }
+
+        }
+        printf("\n");
+
+        if (handle)
+            libusb_close(handle);
+
+    }
+}
+
+int list_devices(void)
+{
+    libusb_device **devs;
+    int r;
+    ssize_t cnt;
+
+    r = libusb_init(NULL);
+    if (r < 0)
+        return r;
+
+    cnt = libusb_get_device_list(NULL, &devs);
+    if (cnt < 0)
+        return (int) cnt;
+
+    print_devs(devs);
+    libusb_free_device_list(devs, 1);
+
+    libusb_exit(NULL);
+    return 0;   
+}
+
+
+
 //ctrl+c 信号处理函数
 void sigint_handler(int sig)
 {
@@ -353,7 +415,7 @@ int main(int argc, char **argv)
     act.sa_flags = 0;
    
 
-    while((opt = getopt(argc, argv, "bif::hv:p:")) != -1)
+    while((opt = getopt(argc, argv, "bif::hv:p:la")) != -1)
     {
         switch(opt)
         {
@@ -381,6 +443,11 @@ int main(int argc, char **argv)
             case 'P' :
                 pid = str2hex(optarg);
                 break;
+            case 'l' :
+            case 'L' :
+                list_devices();
+                exit(0);
+                break;                                
             case 'h' :
             case 'H' :
                 help();
