@@ -45,14 +45,14 @@ typedef unsigned int  uint;
 #define SAVE_FILE_PATH  "libusb_test_recv_data"
 
 
-int no_device_flag = 0;
+int g_no_device_flag = 0;
 FILE *g_file_stream = NULL;
 int g_file_save_en = 0; //文件保存使能标志
 
 uchar rev_buf[SEND_BUFF_LEN];
 uchar send_buf[SEND_BUFF_LEN]; 
 
-libusb_device_handle *dev_handle; //a device handle  
+libusb_device_handle *dev_handle;
 
 char test_bytes[] = 
 "abcdefghijklmnopqrstuvwxyz0123456789\n"
@@ -76,6 +76,7 @@ void *interrupt_rev_thread(void *arg);
 int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data);
 void help(void);
 int str2hex(char *hex);
+void hex2str(uchar *pbDest, uchar *pbSrc, ushort nLen);
 void * usb_monitor_thread(void *arg);
 int save_to_file(FILE *file_stream, uchar *data, int length);
 void print_devs(libusb_device **devs);
@@ -131,16 +132,18 @@ void *bulk_rev_thread(void *arg)
     int size;
     int rec;  
     int save_bytes;
+    char hex_buf[RECV_BUFF_LEN*5];
 
     printf("bulk_rev_thread started.\n");  
 
     while(1)
     {
-        if(no_device_flag){
+        if(g_no_device_flag){
             usleep(50 * 1000);
             continue;
         }
 
+        memset(rev_buf, 0, RECV_BUFF_LEN);
         rec = libusb_bulk_transfer(dev_handle, BULK_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
@@ -149,18 +152,17 @@ void *bulk_rev_thread(void *arg)
                 printf("save %d bytes to file.\n", save_bytes);
             }
 
+            hex2str(hex_buf, rev_buf, size);
+
             printf("bulk ep rev sucess, length: %d bytes. \n", size);
             printf("data is: %s\n", rev_buf);
-            printf("hexadecimal is: ");
-            for(i=0; i<size; i++)
-                printf("0x%x ", rev_buf[i]);
-            printf("\n");
+            printf("hex is: %s\n", hex_buf);
         }
         else
         {
             printf("bulk ep rev faild, err: %s\n", libusb_error_name(rec));
             if(rec == LIBUSB_ERROR_IO)
-                no_device_flag = 1; //防止一直输出err
+                g_no_device_flag = 1; //防止一直输出err
         }
     }
 
@@ -174,16 +176,18 @@ void *interrupt_rev_thread(void *arg)
     int size;
     int rec;  
     int save_bytes;
+    char hex_buf[RECV_BUFF_LEN*5];
 
     printf("interrupt_rev_thread started.\n");  
 
     while(1)
     {
-        if(no_device_flag){
+        if(g_no_device_flag){
             usleep(50 * 1000);
             continue;
         }
 
+        memset(rev_buf, 0, RECV_BUFF_LEN);
         rec = libusb_interrupt_transfer(dev_handle, INT_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
@@ -192,18 +196,17 @@ void *interrupt_rev_thread(void *arg)
                 printf("save %d bytes to file.\n", save_bytes);
             }
 
+            hex2str(hex_buf, rev_buf, size);
+
             printf("interrupt ep rev sucess, length: %d bytes. \n", size);
             printf("data is: %s\n", rev_buf);
-            printf("hexadecimal is: ");
-            for(i=0; i<size; i++)
-                printf("0x%x ",rev_buf[i]);
-            printf("\n");
+            printf("hex is: %s\n", hex_buf);
         }
         else
         {
             printf("interrupt ep rev faild, err: %s\n", libusb_error_name(rec));
             if(rec == LIBUSB_ERROR_IO)
-                no_device_flag = 1; //防止一直输出err
+                g_no_device_flag = 1; //防止一直输出err
         }
     }
 
@@ -248,14 +251,14 @@ int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libu
                 return 0;
             }
 
-            no_device_flag = 0;          
+            g_no_device_flag = 0;          
             printf("usb device open sucess\n\n");
             printf("input data to send or command:");
             fflush(stdout);
         }
     }
     else if (LIBUSB_HOTPLUG_EVENT_DEVICE_LEFT == event) {
-        no_device_flag = 1;
+        g_no_device_flag = 1;
         printf("usb device removed: %04x:%04x\n", desc.idVendor, desc.idProduct);
         if (dev_handle) {           
             libusb_close(dev_handle);
@@ -302,8 +305,24 @@ void help(void)
 }
  
 
-//字符串转十六进制
-// 0x1234 -> 0x1234   or 1234 -> 0x1234
+//将char类型（0-255）的buf转换成以十六进制显示的字符串。
+//buf={'1', '2', '3', 'a', 'b', 'c'} -> "0x31 0x32 0x33 0x61 0x62 0x63"
+//buf={0,1,2,3} -> "0x00 0x01 0x02 0x03"
+void hex2str(uchar *dest, uchar *src, ushort nLen)
+{
+    int i;
+
+    for (i=0; i<nLen; i++)
+    {
+        sprintf(dest+5*i, "%#04x ", src[i]);    //string类函数，不会造成线程切换
+    }
+
+    dest[nLen*5] = '\0';
+}
+
+
+//数字字符串转数字（十六进制）
+// "0x1234" -> 0x1234   or "1234" -> 0x1234
 int str2hex(char *hex) 
 {
     int sum = 0;
@@ -578,21 +597,18 @@ int main(int argc, char **argv)
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
    
-
+    //命令行参数解析
     while((opt = getopt(argc, argv, "bif::hv:p:la")) != -1)
     {
         switch(opt)
         {
             case 'b' :
-            case 'B' :
                 test_mode = BULK_TEST;
                 break;
             case 'i' :
-            case 'I' :
                 test_mode = INT_TEST;
                 break;
             case 'f' :
-            case 'F' :
                 g_file_stream = fopen(optarg == NULL ? SAVE_FILE_PATH : optarg, "wb");    //写打开，并将文件长度截为0，没有则新建
                 if(g_file_stream)  
                     g_file_save_en = 1;
@@ -600,25 +616,20 @@ int main(int argc, char **argv)
                     perror("file open faild: ");    
                 break;                
             case 'v' :
-            case 'V' :
                 vid = str2hex(optarg);
                 break;
             case 'p' :
-            case 'P' :
                 pid = str2hex(optarg);
                 break;
             case 'l' :
-            case 'L' :
                 list_devices();
                 exit(0);
                 break; 
             case 'a' :
-            case 'A' :
                 get_descriptor_with_vid_pid(vid, pid);
                 exit(0);
                 break;                                               
             case 'h' :
-            case 'H' :
                 help();
                 return 0;
                 break;
@@ -710,7 +721,7 @@ int main(int argc, char **argv)
         }
     }
     else if(test_mode == INT_TEST){
-         r = pthread_create(&int_rev_thread_id, NULL, interrupt_rev_thread, NULL);
+        r = pthread_create(&int_rev_thread_id, NULL, interrupt_rev_thread, NULL);
         if(r != 0 )
         {
             perror("thread creation faild\n");

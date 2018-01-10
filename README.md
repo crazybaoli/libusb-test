@@ -41,6 +41,6 @@ this wil print: device descriptor，configuration descriptor, interface descript
 	or 
 	sudo ./libusb -ffilepath
 #### 7. send data quickly
-enter 'test64' when the program is running.
+enter 'test64' when the program is running. 
 also enter test128, test200, etc.
 
