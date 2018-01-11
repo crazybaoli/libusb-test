@@ -20,6 +20,7 @@
 #include <string.h>
 #include <math.h>
 #include <signal.h>
+#include <semaphore.h>
 
 #include <libusb-1.0/libusb.h> 
 
@@ -44,10 +45,13 @@ typedef unsigned int  uint;
 
 #define SAVE_FILE_PATH  "libusb_test_recv_data"
 
+sem_t print_sem; //信号量
 
 int g_no_device_flag = 0;
 FILE *g_file_stream = NULL;
 int g_file_save_en = 0; //文件保存使能标志
+
+int send_flag = 0;
 
 uchar rev_buf[SEND_BUFF_LEN];
 uchar send_buf[SEND_BUFF_LEN]; 
@@ -98,11 +102,16 @@ int bulk_send(char *buf, int num)
     int size;
     int rec;    
     
+    send_flag = 1;
     rec = libusb_bulk_transfer(dev_handle, BULK_SEND_EP, buf, num, &size, 0);  
-    if(rec == 0) 
-        printf("bulk send sucess,length is:%d\n", size);
-    else
+    if(rec == 0) {
+        printf("bulk send sucess,length: %d bytes\n", size);
+        sem_post(&print_sem);
+    }
+    else{
+        send_flag = 0;
         printf("bulk send faild, err: %s\n", libusb_error_name(rec));
+    }
 
     return 0;   
     
@@ -115,11 +124,16 @@ int interrupt_send(char *buf, int num)
     int size;
     int rec;    
     
+    send_flag = 1;
     rec = libusb_interrupt_transfer(dev_handle, INT_SEND_EP, buf, num, &size, 0);  
-    if(rec == 0) 
-        printf("interrupt send sucess,length is:%d\n", size);
-    else
+    if(rec == 0) {
+        printf("interrupt send sucess, length: %d bytes\n", size);
+        sem_post(&print_sem);
+    }
+    else{
+        send_flag = 0;
         printf("interrupt send faild, err: %s\n", libusb_error_name(rec));
+    }
 
     return 0;   
     
@@ -147,16 +161,22 @@ void *bulk_rev_thread(void *arg)
         rec = libusb_bulk_transfer(dev_handle, BULK_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
+            if(send_flag == 1)  //考虑如果没有调用发送数据函数，接收到数据后调用sem_wait会一直等待直到调用了bulk_send，才会继续往下执行
+            {
+                send_flag = 0;
+                sem_wait(&print_sem);
+            }
+
+            printf("\nbulk ep rev sucess, length: %d bytes. \n", size);
+
             if(g_file_save_en){
                 save_bytes = save_to_file(g_file_stream, rev_buf, size);            
                 printf("save %d bytes to file.\n", save_bytes);
             }
 
-            hex2str(hex_buf, rev_buf, size);
-
-            printf("bulk ep rev sucess, length: %d bytes. \n", size);
-            printf("data is: %s\n", rev_buf);
-            printf("hex is: %s\n", hex_buf);
+            hex2str(hex_buf, rev_buf, size);           
+            printf("data is: \n%s\n", rev_buf);
+            printf("hex is: \n%s\n", hex_buf);
         }
         else
         {
@@ -165,7 +185,6 @@ void *bulk_rev_thread(void *arg)
                 g_no_device_flag = 1; //防止一直输出err
         }
     }
-
     
 }
 
@@ -191,16 +210,22 @@ void *interrupt_rev_thread(void *arg)
         rec = libusb_interrupt_transfer(dev_handle, INT_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
+            if(send_flag == 1)  //考虑如果没有调用发送数据函数，接收到数据后调用sem_wait会一直等待直到调用了interrupt_send，才会继续往下执行
+            {
+                send_flag = 0;
+                sem_wait(&print_sem);
+            }
+
+            printf("\ninterrupt ep rev sucess, length: %d bytes. \n", size);
+
             if(g_file_save_en){
                 save_bytes = save_to_file(g_file_stream, rev_buf, size);            
                 printf("save %d bytes to file.\n", save_bytes);
             }
 
-            hex2str(hex_buf, rev_buf, size);
-
-            printf("interrupt ep rev sucess, length: %d bytes. \n", size);
-            printf("data is: %s\n", rev_buf);
-            printf("hex is: %s\n", hex_buf);
+            hex2str(hex_buf, rev_buf, size);            
+            printf("data is: \n%s\n", rev_buf);
+            printf("hex is: \n%s\n", hex_buf);
         }
         else
         {
@@ -306,6 +331,7 @@ void help(void)
  
 
 //将char类型（0-255）的buf转换成以十六进制显示的字符串。
+//使用这个函数可以避免多次循环调用printf("%x", buf[i]); 提高效率，并且能避免线程切换造成输出乱序的问题。
 //buf={'1', '2', '3', 'a', 'b', 'c'} -> "0x31 0x32 0x33 0x61 0x62 0x63"
 //buf={0,1,2,3} -> "0x00 0x01 0x02 0x03"
 void hex2str(uchar *dest, uchar *src, ushort nLen)
@@ -574,7 +600,6 @@ void sigint_handler(int sig)
 
 int main(int argc, char **argv) 
 {  
-    libusb_context *ctx = NULL; //a libusb session  
     int r;  
     ssize_t cnt; 
     int opt;
@@ -582,8 +607,10 @@ int main(int argc, char **argv)
     int vid, pid;
     int send_length;
 
+    libusb_context *ctx = NULL;
+
     struct sigaction act;
-    
+   
     pthread_t bulk_rev_thread_id;
     pthread_t int_rev_thread_id;
     pthread_t usb_monitor_thread_id;
@@ -592,6 +619,7 @@ int main(int argc, char **argv)
     vid = VID;
     pid = PID;
     g_file_save_en = 0;
+    send_flag = 0;
 
     act.sa_handler = sigint_handler;
     sigemptyset(&act.sa_mask);
@@ -652,6 +680,10 @@ int main(int argc, char **argv)
     printf("usb device: VID:%#06x PID:%#06x\n\n", vid, pid);    //#:输出0x，06:vid或pid第一个数字为0时，输出0x0471而不是0x471
 
     sigaction(SIGINT, &act, NULL);
+
+    r = sem_init(&print_sem, 0, 0); //初始化信号量，用于解决多线程下printf输出同步的问题
+    if(r != 0)
+        perror("sem_init faild: ");
 
     r = libusb_init(&ctx); //initialize the library for the session we just declared  
     if(r < 0) {  
