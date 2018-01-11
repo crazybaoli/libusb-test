@@ -45,16 +45,15 @@ typedef unsigned int  uint;
 
 #define SAVE_FILE_PATH  "libusb_test_recv_data"
 
+
 sem_t print_sem; //信号量
-
-int g_no_device_flag = 0;
 FILE *g_file_stream = NULL;
+int g_no_device_flag = 0;
 int g_file_save_en = 0; //文件保存使能标志
+int g_send_flag = 0;    //调用数据发送函数标志
 
-int send_flag = 0;
-
-uchar rev_buf[SEND_BUFF_LEN];
-uchar send_buf[SEND_BUFF_LEN]; 
+uchar rev_buf[SEND_BUFF_LEN];   //usb 接收缓冲区
+uchar send_buf[SEND_BUFF_LEN];  //usb发送缓冲区 
 
 libusb_device_handle *dev_handle;
 
@@ -69,47 +68,52 @@ char test_bytes[] =
 "abcdefghijklmnopqrstuvwxyz0123456789\n"
 "abcdefghijklmnopqrstuvwxyz0123456789\n"
 "abcdefghijklmnopqrstuvwxyz0123456789\n"
-"abcdefghijklmnopqrstuvwxyz0123456789\n";   //37*10 bytes
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n"
+"abcdefghijklmnopqrstuvwxyz0123456789\n";   //37*15=555 bytes
 
 
 
-int bulk_send(char *buf, int num);
-int interrupt_send(char *buf, int num);
+int  bulk_send(char *buf, int num);
+int  interrupt_send(char *buf, int num);
 void *bulk_rev_thread(void *arg);
 void *interrupt_rev_thread(void *arg);
-int LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data);
+int  LIBUSB_CALL usb_event_callback(libusb_context *ctx, libusb_device *dev, libusb_hotplug_event event, void *user_data);
 void help(void);
-int str2hex(char *hex);
+int  str2hex(char *hex);
 void hex2str(uchar *pbDest, uchar *pbSrc, ushort nLen);
-void * usb_monitor_thread(void *arg);
-int save_to_file(FILE *file_stream, uchar *data, int length);
+void *usb_monitor_thread(void *arg);
+int  save_to_file(FILE *file_stream, uchar *data, int length);
 void print_devs(libusb_device **devs);
-int list_devices(void);
+int  list_devices(void);
 void print_endpoint(const struct libusb_endpoint_descriptor *endpoint);
 void print_altsetting(const struct libusb_interface_descriptor *interface);
 void print_interface(const struct libusb_interface *interface);
 void print_configuration(struct libusb_config_descriptor *config);
 void print_device(libusb_device *dev, struct libusb_device_descriptor *desc);
-int print_descriptor(libusb_device *dev);
-int get_descriptor_with_vid_pid(int vid, int pid);
+int  print_descriptor(libusb_device *dev);
+int  get_descriptor_with_vid_pid(int vid, int pid);
 void sigint_handler(int sig);
 
 
-
+//采用bulk端点发送数据
 int bulk_send(char *buf, int num)
 {
 
     int size;
     int rec;    
     
-    send_flag = 1;
+    g_send_flag = 1;
     rec = libusb_bulk_transfer(dev_handle, BULK_SEND_EP, buf, num, &size, 0);  
     if(rec == 0) {
         printf("bulk send sucess,length: %d bytes\n", size);
         sem_post(&print_sem);
     }
     else{
-        send_flag = 0;
+        g_send_flag = 0;
         printf("bulk send faild, err: %s\n", libusb_error_name(rec));
     }
 
@@ -118,20 +122,21 @@ int bulk_send(char *buf, int num)
 }
 
 
+//采用interrupt端点发送数据
 int interrupt_send(char *buf, int num)
 {
 
     int size;
     int rec;    
     
-    send_flag = 1;
+    g_send_flag = 1;
     rec = libusb_interrupt_transfer(dev_handle, INT_SEND_EP, buf, num, &size, 0);  
     if(rec == 0) {
         printf("interrupt send sucess, length: %d bytes\n", size);
         sem_post(&print_sem);
     }
     else{
-        send_flag = 0;
+        g_send_flag = 0;
         printf("interrupt send faild, err: %s\n", libusb_error_name(rec));
     }
 
@@ -140,6 +145,7 @@ int interrupt_send(char *buf, int num)
 }
 
 
+//bulk 端点接收线程
 void *bulk_rev_thread(void *arg)
 {
     int i=0;
@@ -161,9 +167,9 @@ void *bulk_rev_thread(void *arg)
         rec = libusb_bulk_transfer(dev_handle, BULK_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
-            if(send_flag == 1)  //考虑如果没有调用发送数据函数，接收到数据后调用sem_wait会一直等待直到调用了bulk_send，才会继续往下执行
+            if(g_send_flag == 1)  //考虑如果没有调用发送数据函数，接收到数据后调用sem_wait会一直等待直到调用了bulk_send，才会继续往下执行
             {
-                send_flag = 0;
+                g_send_flag = 0;
                 sem_wait(&print_sem);
             }
 
@@ -189,6 +195,7 @@ void *bulk_rev_thread(void *arg)
 }
 
 
+//interrupt 端点接收线程
 void *interrupt_rev_thread(void *arg)
 {
     int i=0;
@@ -210,9 +217,9 @@ void *interrupt_rev_thread(void *arg)
         rec = libusb_interrupt_transfer(dev_handle, INT_RECV_EP, rev_buf, RECV_BUFF_LEN, &size, 0);  
         if(rec == 0) 
         {
-            if(send_flag == 1)  //考虑如果没有调用发送数据函数，接收到数据后调用sem_wait会一直等待直到调用了interrupt_send，才会继续往下执行
+            if(g_send_flag == 1)  //考虑如果没有调用发送数据函数，接收到数据后调用sem_wait会一直等待直到调用了interrupt_send，才会继续往下执行
             {
-                send_flag = 0;
+                g_send_flag = 0;
                 sem_wait(&print_sem);
             }
 
@@ -619,7 +626,7 @@ int main(int argc, char **argv)
     vid = VID;
     pid = PID;
     g_file_save_en = 0;
-    send_flag = 0;
+    g_send_flag = 0;
 
     act.sa_handler = sigint_handler;
     sigemptyset(&act.sa_mask);
@@ -681,7 +688,7 @@ int main(int argc, char **argv)
 
     sigaction(SIGINT, &act, NULL);
 
-    r = sem_init(&print_sem, 0, 0); //初始化信号量，用于解决多线程下printf输出同步的问题
+    r = sem_init(&print_sem, 0, 0); //初始化信号量，用于解决多线程下printf输出乱序的问题
     if(r != 0)
         perror("sem_init faild: ");
 
