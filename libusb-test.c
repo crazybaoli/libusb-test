@@ -354,7 +354,7 @@ void hex2str(uchar *dest, uchar *src, ushort nLen)
 }
 
 
-//数字字符串转数字（十六进制）
+//十六进制数字字符串转数字（十六进制）
 // "0x1234" -> 0x1234   or "1234" -> 0x1234
 int str2hex(char *hex) 
 {
@@ -369,7 +369,8 @@ int str2hex(char *hex)
 
     for(int i = 0; i < 4; i++)
     {
-        tmp = hex_str[i] - (((hex_str[i] >= '0') && (hex_str[i] <= '9')) ? '0' : ((hex_str[i] >= 'A') && (hex_str[i] <= 'Z')) ? 'A' - 10 : 'a' - 10);
+        tmp = hex_str[i] - (((hex_str[i] >= '0') && (hex_str[i] <= '9')) ? '0' : \
+            ((hex_str[i] >= 'A') && (hex_str[i] <= 'Z')) ? 'A' - 10 : 'a' - 10);
         sum += tmp * pow(16, 3-i);
     }
 
@@ -391,8 +392,7 @@ int save_to_file(FILE *file_stream, uchar *data, int length)
 }
 
 
-//列出系统所有的USB设备.
-//包括：bus number. device number, vid, pid, product info
+
 void print_devs(libusb_device **devs)
 {
     libusb_device *dev;
@@ -429,6 +429,8 @@ void print_devs(libusb_device **devs)
     }
 }
 
+//列出系统所有的USB设备.
+//包括：bus number. device number, vid, pid, product info
 int list_devices(void)
 {
     libusb_device **devs;
@@ -608,7 +610,6 @@ void sigint_handler(int sig)
 int main(int argc, char **argv) 
 {  
     int r;  
-    ssize_t cnt; 
     int opt;
     int test_mode;
     int vid, pid;
@@ -631,6 +632,7 @@ int main(int argc, char **argv)
     act.sa_handler = sigint_handler;
     sigemptyset(&act.sa_mask);
     act.sa_flags = 0;
+    sigaction(SIGINT, &act, NULL);
    
     //命令行参数解析
     while((opt = getopt(argc, argv, "bif::hv:p:la")) != -1)
@@ -675,6 +677,7 @@ int main(int argc, char **argv)
         }
     }
 
+
     printf("\nlibusb test\n");
     if(test_mode == BULK_TEST)
         printf("test bulk transfer\n");
@@ -685,8 +688,6 @@ int main(int argc, char **argv)
         return 0;
     }
     printf("usb device: VID:%#06x PID:%#06x\n\n", vid, pid);    //#:输出0x，06:vid或pid第一个数字为0时，输出0x0471而不是0x471
-
-    sigaction(SIGINT, &act, NULL);
 
     r = sem_init(&print_sem, 0, 0); //初始化信号量，用于解决多线程下printf输出乱序的问题
     if(r != 0)
@@ -767,7 +768,6 @@ int main(int argc, char **argv)
         }       
     }
 
-    usleep(1000 * 5);   //等线程开始执行后，再执行while
 
     while(1)
     {
